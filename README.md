@@ -105,115 +105,34 @@ All discovered leads are saved to your local SQLite database:
 
 ---
 
-## 🏛️ Technical Architecture
+## 🏛️ Clean Architecture
 
-Client Finder uses a modern multi-stage pipeline designed for resilience, data hygiene, and security.
+Client Finder is designed as a **linear, deterministic pipeline**. Each stage has a single responsibility, passing verified data forward into your local database.
 
 ```mermaid
-flowchart TB
-    subgraph UI_LAYER[" 🖥️ USER INTERFACE LAYER (Streamlit) "]
-        direction TB
-        InputPrompt["💬 Natural Language Query / Chat Form"]
-        CRMView["▤ Lead Pipeline CRM & Table"]
-        SuppressionTab["⊘ Suppression (Do-Not-Contact) List"]
-    end
+flowchart LR
+    A["👤 1. User Input<br/><b>Prompt or Criteria</b><br/>• Niche & Location<br/>• Launch signal & Offer"] 
+    --> B["🔍 2. Live Discovery<br/><b>Tavily / Brave Search</b><br/>• 3 targeted search queries<br/>• Deduplicate domains & filter social"]
+    --> C["🕷️ 3. Safe Web Crawler<br/><b>DNS Guard & Scraper</b><br/>• SSRF security check<br/>• Crawl contact/about pages<br/>• Harvest published emails"]
+    --> D["🎯 4. Qualification & AI<br/><b>Scorer & Groq LLM</b><br/>• 0–100 heuristic fit score<br/>• Evidence-grounded cold draft"]
+    --> E["💾 5. Local CRM & Mailer<br/><b>SQLite (leads.db)</b><br/>• Review evidence & edit notes<br/>• One-click CSV export<br/>• Approved 1-by-1 SMTP send"]
 
-    subgraph INTENT_LAYER[" 🧠 INTENT INTERPRETATION & CACHE "]
-        direction TB
-        HashGen["Key Generator: SHA-256(Message + History + Model)"]
-        CacheCheck{"SQLite Intent Cache<br/>(30-Day TTL)"}
-        LLMParser["Structured Query Extractor<br/>(Groq / OpenAI)"]
-        SearchBrief["Validated Execution Brief<br/>(Category, Location, Launch, Offer)"]
-
-        HashGen --> CacheCheck
-        CacheCheck -- Hit (Instant) --> SearchBrief
-        CacheCheck -- Miss --> LLMParser --> SearchBrief
-    end
-
-    subgraph DISCOVERY_LAYER[" 🌐 DISCOVERY & MULTI-QUERY SEARCH "]
-        direction TB
-        Q1["Query A: 'emerging {category} brands {location} {recency}'"]
-        Q2["Query B: 'new {category} brand launch {location}'"]
-        Q3["Query C: '{category} startup founders {location}'"]
-        SearchEngine["Search Provider Adapter<br/>(Tavily API / Brave Search API)"]
-        DedupeFilter["Deduplication & Host Filtering<br/>(Excludes Instagram, LinkedIn, FB, TikTok, etc.)"]
-
-        Q1 & Q2 & Q3 --> SearchEngine --> DedupeFilter
-    end
-
-    subgraph SECURITY_LAYER[" 🛡️ SECURITY & SSRF SANDBOX "]
-        direction TB
-        DNSCheck{"DNS Inspection (socket.getaddrinfo)<br/>is_public_http_url()"}
-        BlockRequest["❌ Block & Drop Request<br/>(Blocks localhost, 127.0.0.1, 10.0.0.0/8, 192.168.0.0/16)"]
-        SafeFetch["✅ Safe Public Request Allowed"]
-
-        DNSCheck -- Private / Loopback IP --> BlockRequest
-        DNSCheck -- Globally Routable IP --> SafeFetch
-    end
-
-    subgraph CRAWLER_LAYER[" 🕷️ DEEP WEB RESEARCH & EXTRACTION "]
-        direction TB
-        HomeScrape["Scrape Homepage (BeautifulSoup, max 1.5MB)"]
-        SubpageDiscovery["Discover Contact Subpages<br/>(/contact, /about, /press, /collab)"]
-        ContactHarvest["Harvest Published Contacts<br/>(Regex Email + Mailto Link Scraper)"]
-        EvidenceLedger["Compile Evidence & Citation URLs"]
-
-        SafeFetch --> HomeScrape --> SubpageDiscovery --> ContactHarvest --> EvidenceLedger
-    end
-
-    subgraph SCORING_LAYER[" 📊 QUALIFICATION & HEURISTICS "]
-        direction TB
-        ScoreCalc["Deterministic Scorer (0-100 pts)"]
-        CategoryMatch["Category Term Match: +30 pts"]
-        LaunchMatch["Launch / Activity Signal: +20 pts"]
-        EmailFound["Published Email Found: +20 pts"]
-        LocationMatch["Location In Evidence: +15 pts"]
-        SiteReadable["Site Content Accessible: +15 pts"]
-
-        ScoreCalc --- CategoryMatch & LaunchMatch & EmailFound & LocationMatch & SiteReadable
-    end
-
-    subgraph DRAFTING_LAYER[" ✍️ AI OUTREACH DRAFTING "]
-        direction TB
-        PromptGuard["Prompt Injection Defense<br/>(Public text treated as untrusted JSON payload)"]
-        DrafterEngine["Generator Adapter<br/>(Groq gpt-oss-20b / OpenAI / Deterministic Template)"]
-        OutreachBody["Evidence-Backed Personalized Email Draft"]
-
-        PromptGuard --> DrafterEngine --> OutreachBody
-    end
-
-    subgraph PERSISTENCE_LAYER[" 💾 LOCAL STORAGE & PERSISTENCE "]
-        direction TB
-        SQLiteDB[("SQLite Database<br/>(data/leads.db)")]
-        LeadsTable["Table: leads<br/>(ON CONFLICT(website) DO UPDATE)"]
-        SuppressTable["Table: suppression<br/>(Do-Not-Contact List)"]
-        CacheTable["Table: chat_intent_cache"]
-
-        SQLiteDB --- LeadsTable & SuppressTable & CacheTable
-    end
-
-    subgraph OUTBOUND_LAYER[" 📤 HUMAN-IN-THE-LOOP OUTREACH "]
-        direction TB
-        GateReview{"Human Review Gate<br/>(Status = 'Ready to send')"}
-        ApproveBox{"Explicit Checkbox Approval"}
-        SMTPClient["Secure SMTP SSL (Port 465)<br/>+ CAN-SPAM Legal Footer & Opt-Out"]
-
-        GateReview --> ApproveBox --> SMTPClient
-    end
-
-    %% Pipeline Flow Connections
-    InputPrompt --> HashGen
-    SearchBrief --> Q1 & Q2 & Q3
-    DedupeFilter --> DNSCheck
-    EvidenceLedger --> ScoreCalc
-    EvidenceLedger --> PromptGuard
-    ScoreCalc --> LeadsTable
-    OutreachBody --> LeadsTable
-    LeadsTable --> CRMView
-    SuppressionTab --> SuppressTable
-    CRMView --> ExportCSV["📥 Download CSV"]
-    CRMView --> GateReview
+    style A fill:#f8fafc,stroke:#64748b,stroke-width:2px,color:#0f172a
+    style B fill:#eff6ff,stroke:#2563eb,stroke-width:2px,color:#1e40af
+    style C fill:#fefce8,stroke:#ca8a04,stroke-width:2px,color:#854d0e
+    style D fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#166534
+    style E fill:#faf5ff,stroke:#9333ea,stroke-width:2px,color:#6b21a8
 ```
+
+### The 5 Pipeline Stages Explained
+
+| Stage | Responsibility | How It Works |
+| :--- | :--- | :--- |
+| **1. User Intent** | Defines the target prospect | Translates your conversational query (e.g. *"sustainable clothing brands in India"*) into structured search criteria. Caches repeated queries in SQLite via SHA-256 hash. |
+| **2. Live Discovery** | Finds candidate businesses | Runs 3 distinct search query variations on Tavily or Brave Search. Deduplicates root domains and strips social networks (Instagram, LinkedIn, TikTok, etc.). |
+| **3. Safe Web Crawler** | Extracts evidence & contacts | Validates domain IP via DNS to block SSRF (drops localhost and private IPs). Fetches homepage + up to 3 Contact/About subpages to harvest published commercial emails. |
+| **4. Qualification & AI** | Scores fit & writes drafts | Evaluates category keywords, launch signals, and contact availability (0–100 score). Prompts Groq (`openai/gpt-oss-20b`) to write a draft grounded strictly in scraped evidence. |
+| **5. Local CRM & Delivery** | Review, export, & outreach | Upserts leads to SQLite (`data/leads.db`). Lets you inspect evidence, edit drafts, export CSV, and send approved emails one-by-one via SMTP with compliant opt-out footers. |
 
 ---
 

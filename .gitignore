@@ -9,3 +9,5 @@ data/*.db
 build/
 dist/
 *.egg-info/
+*.log
+.streamlit/*.log
